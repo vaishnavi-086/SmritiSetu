@@ -1,0 +1,193 @@
+import React, { useState, useEffect } from 'react';
+import { base44 } from '@/api/base44Client';
+import { useAuth } from '@/lib/AuthContext';
+import { useLang } from '@/lib/i18n';
+import { usePatient } from '@/lib/usePatient';
+import { getGreeting } from '@/lib/games';
+import { Link, useNavigate } from 'react-router-dom';
+import { Smile, Calendar, Flame, ArrowRight, Plus } from 'lucide-react';
+import GameCard from '@/components/GameCard';
+import ReminderCard from '@/components/ReminderCard';
+import LargeButton from '@/components/LargeButton';
+
+const moodEmojis = { happy: '😊', calm: '😌', neutral: '😐', sad: '😢', anxious: '😟' };
+const moodColors = {
+  happy: 'bg-amber-100 hover:bg-amber-200',
+  calm: 'bg-sky-100 hover:bg-sky-200',
+  neutral: 'bg-slate-100 hover:bg-slate-200',
+  sad: 'bg-indigo-100 hover:bg-indigo-200',
+  anxious: 'bg-rose-100 hover:bg-rose-200'
+};
+
+export default function Home() {
+  const { t, lang } = useLang();
+  const { user } = useAuth();
+  const { patient, loading, createPatient } = usePatient();
+  const navigate = useNavigate();
+  const [reminders, setReminders] = useState([]);
+  const [todayMood, setTodayMood] = useState(null);
+  const [showCreate, setShowCreate] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    if (!patient) return;
+    (async () => {
+      try {
+        const all = await base44.entities.Reminder.filter({ patient_id: patient.id });
+        const today = new Date().toDateString();
+        const todays = all
+          .filter(r => !r.completed || new Date(r.updated_date).toDateString() === today)
+          .sort((a, b) => a.time.localeCompare(b.time))
+          .slice(0, 3);
+        setReminders(todays);
+        const moods = await base44.entities.MoodEntry.filter({ patient_id: patient.id });
+        const latest = moods.sort((a, b) => new Date(b.created_date) - new Date(a.created_date))[0];
+        if (latest && new Date(latest.created_date).toDateString() === today) {
+          setTodayMood(latest.mood);
+        }
+      } catch (e) { console.error(e); }
+    })();
+  }, [patient]);
+
+  const handleCreate = async () => {
+    if (!newName.trim()) return;
+    setCreating(true);
+    await createPatient({ name: newName.trim(), language: lang, caregiver_name: user?.full_name || '' });
+    setCreating(false);
+    setShowCreate(false);
+    setNewName('');
+  };
+
+  const toggleReminder = async (reminder) => {
+    const updated = await base44.entities.Reminder.update(reminder.id, { completed: !reminder.completed });
+    setReminders(prev => prev.map(r => r.id === reminder.id ? updated : r));
+  };
+
+  const recordMood = async (mood) => {
+    if (todayMood) return;
+    setTodayMood(mood);
+    await base44.entities.MoodEntry.create({ patient_id: patient.id, mood });
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="w-10 h-10 border-4 border-orange-200 border-t-orange-500 rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  if (!patient && !showCreate) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 text-center">
+        <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-orange-400 to-rose-400 flex items-center justify-center mb-6 shadow-lg">
+          <Smile size={40} className="text-white" />
+        </div>
+        <h1 className="text-2xl font-bold text-slate-800 mb-2">{t('appTitle')}</h1>
+        <p className="text-slate-500 mb-8 max-w-xs">{t('noProfile')}</p>
+        <LargeButton onClick={() => setShowCreate(true)}>{t('createProfile')}</LargeButton>
+      </div>
+    );
+  }
+
+  if (showCreate) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16">
+        <h2 className="text-2xl font-bold text-slate-800 mb-6">{t('createProfile')}</h2>
+        <input
+          value={newName}
+          onChange={e => setNewName(e.target.value)}
+          placeholder={t('enterName')}
+          className="w-full max-w-sm px-5 py-4 text-lg rounded-2xl border-2 border-orange-200 focus:border-orange-400 outline-none mb-4"
+        />
+        <div className="flex gap-3">
+          <LargeButton variant="secondary" onClick={() => setShowCreate(false)}>{t('cancel')}</LargeButton>
+          <LargeButton onClick={handleCreate} disabled={creating || !newName.trim()}>{t('save')}</LargeButton>
+        </div>
+      </div>
+    );
+  }
+
+  const games = ['memory_match', 'pattern_recognition', 'routine_recall', 'object_recognition'];
+
+  return (
+    <div className="space-y-8">
+      {/* Greeting */}
+      <div className="flex items-center gap-4">
+        <div className="w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-bold text-white shadow-md" style={{ background: patient.avatar_color || '#5B8DEF' }}>
+          {patient.name.charAt(0).toUpperCase()}
+        </div>
+        <div>
+          <p className="text-slate-400 text-sm">{getGreeting(t)},</p>
+          <h1 className="text-2xl font-bold text-slate-800">{patient.name} 👋</h1>
+        </div>
+      </div>
+
+      {/* Mood check-in */}
+      <div className="bg-white rounded-3xl p-5 shadow-sm border border-orange-100">
+        <h2 className="text-lg font-semibold text-slate-700 mb-4 flex items-center gap-2">
+          <Smile size={22} className="text-orange-500" /> {t('moodCheck')}
+        </h2>
+        <div className="flex justify-between gap-2">
+          {Object.entries(moodEmojis).map(([mood, emoji]) => (
+            <button
+              key={mood}
+              onClick={() => recordMood(mood)}
+              disabled={!!todayMood}
+              className={`flex flex-col items-center gap-1 p-3 rounded-2xl transition-all flex-1 ${
+                todayMood === mood ? 'ring-2 ring-orange-400 ' + moodColors[mood] : moodColors[mood]
+              } ${todayMood && todayMood !== mood ? 'opacity-40' : ''}`}
+            >
+              <span className="text-3xl">{emoji}</span>
+              <span className="text-xs font-medium text-slate-600">{t(mood)}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Streak */}
+      <div className="flex items-center gap-3 bg-gradient-to-r from-orange-400 to-rose-400 rounded-3xl p-4 text-white shadow-lg">
+        <div className="w-12 h-12 rounded-2xl bg-white/20 flex items-center justify-center">
+          <Flame size={26} />
+        </div>
+        <div className="flex-1">
+          <p className="text-2xl font-bold">{patient.daily_streak || 0} {t('dailyStreak')}</p>
+          <p className="text-sm text-white/90">{t('keepGoing')}</p>
+        </div>
+      </div>
+
+      {/* Games */}
+      <div>
+        <h2 className="text-lg font-semibold text-slate-700 mb-4">{t('games')}</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {games.map(g => <GameCard key={g} gameType={g} />)}
+        </div>
+      </div>
+
+      {/* Reminders preview */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-slate-700 flex items-center gap-2">
+            <Calendar size={20} className="text-orange-500" /> {t('todaysReminders')}
+          </h2>
+          <Link to="/reminders" className="text-sm text-orange-600 font-medium flex items-center gap-1">
+            {t('viewAll')} <ArrowRight size={14} />
+          </Link>
+        </div>
+        {reminders.length === 0 ? (
+          <div className="bg-white rounded-2xl p-6 text-center text-slate-400 border border-orange-100">
+            <p className="mb-3">{t('noReminders')}</p>
+            <button onClick={() => navigate('/reminders')} className="inline-flex items-center gap-1 text-orange-600 font-medium">
+              <Plus size={16} /> {t('addReminder')}
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {reminders.map(r => <ReminderCard key={r.id} reminder={r} onToggle={() => toggleReminder(r)} />)}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
